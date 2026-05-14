@@ -1,0 +1,92 @@
+import os
+import argparse
+import cv2
+import mediapipe as mp
+import numpy as np
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
+
+def process_img(img, detector):
+    # Convert OpenCV BGR to MediaPipe RGB
+    rgb_frame = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+
+    # Perform detection
+    detection_result = detector.detect(mp_image)
+
+    if detection_result.detections:
+        for detection in detection_result.detections:
+            # Get bounding box coordinates
+            bbox = detection.bounding_box
+            x, y, w, h = bbox.origin_x, bbox.origin_y, bbox.width, bbox.height
+
+            # Ensure coordinates are within image boundaries (prevents crashes)
+            x, y = max(0, x), max(0, y)
+            
+            # Apply blur to the region of interest (ROI)
+            face_roi = img[y:y+h, x:x+w]
+            if face_roi.size > 0:
+                blurred_face = cv2.blur(face_roi, (50, 50))
+                img[y:y+h, x:x+w] = blurred_face
+
+    return img
+
+# --- Argument Parsing ---
+parser = argparse.ArgumentParser()
+parser.add_argument("--mode", default='webcam', choices=['image', 'video', 'webcam'])
+parser.add_argument("--filePath", default=None)
+args = parser.parse_args()
+
+output_dir = './output'
+if not os.path.exists(output_dir):
+    os.makedirs(output_dir)
+
+# --- Initialize MediaPipe Tasks Face Detector ---
+# Path to the model you downloaded in Step 1
+model_path = 'detector.tflite' 
+
+base_options = python.BaseOptions(model_asset_path=model_path)
+options = vision.FaceDetectorOptions(base_options=base_options)
+detector = vision.FaceDetector.create_from_options(options)
+
+# --- Execution Logic ---
+try:
+    if args.mode == "image":
+        img = cv2.imread(args.filePath)
+        if img is not None:
+            img = process_img(img, detector)
+            cv2.imwrite(os.path.join(output_dir, 'output.png'), img)
+            print("Image processed and saved to ./output/output.png")
+
+    elif args.mode == 'video':
+        cap = cv2.VideoCapture(args.filePath)
+        ret, frame = cap.read()
+        if ret:
+            h, w, _ = frame.shape
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(os.path.join(output_dir, 'output.mp4'), fourcc, 25, (w, h))
+            
+            while ret:
+                frame = process_img(frame, detector)
+                out.write(frame)
+                ret, frame = cap.read()
+            cap.release()
+            out.release()
+            print("Video processed and saved to ./output/output.mp4")
+
+    elif args.mode == 'webcam':
+        cap = cv2.VideoCapture(0) # Changed to 0 as it is standard; change to 2 if needed
+        while True:
+            ret, frame = cap.read()
+            if not ret: break
+            
+            frame = process_img(frame, detector)
+            cv2.imshow('Modern Face Blur', frame)
+            
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+        cap.release()
+        cv2.destroyAllWindows()
+
+finally:
+    detector.close() # Always close the detector to free up resources
